@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                                       HERMES.mq5 |
+//|                                                       HERMES.MQ5 |
 //|                                          Algo Hermes Trading Bot |
 //|                      https://github.com/tradingluca31-boop/HERMES |
 //+------------------------------------------------------------------+
@@ -10,13 +10,432 @@
 #property description "Date de création: 22 septembre 2025"
 #property description "Ratio R:R 1:5 | SL 0.70% | TP 3.50% | Break-Even +1R"
 
-#include <Trade/Trade.mqh>
-#include <Trade/PositionInfo.mqh>
-#include <Trade/SymbolInfo.mqh>
-#include <Trade/AccountInfo.mqh>
+#include <Trade\Trade.mqh>
+#include <Trade\PositionInfo.mqh>
+#include <Trade\SymbolInfo.mqh>
+#include <Trade\AccountInfo.mqh>
 
-#include "HermesConfig.mqh"
-#include "HermesUtils.mqh"
+//+------------------------------------------------------------------+
+//| Paramètres de l'algorithme HERMES                               |
+//+------------------------------------------------------------------+
+
+// Magic Number
+#define HERMES_MAGIC 123456789
+
+// Paramètres de risque
+input double stop_loss_pct = 0.70;        // Stop Loss en %
+input double take_profit_pct = 3.50;      // Take Profit en %
+input double be_trigger_pct = 0.70;       // Break-Even trigger en %
+
+// Paramètres RSI H4
+input int rsi_oversold_h4 = 30;           // RSI H4 sur-vendu
+input int rsi_overbought_h4 = 70;         // RSI H4 sur-acheté
+
+// Filtres
+input bool news_filter_on_off = true;           // Filtre News ON/OFF
+input bool block_same_pair_on_off = true;       // Bloquer même paire
+input bool block_other_crypto_on_off = true;    // Bloquer autres cryptos
+
+// Paramètres de lot
+input double risk_per_trade = 1.0;        // Risque par trade en %
+input double min_lot_size = 0.01;         // Lot minimum
+input double max_lot_size = 10.0;         // Lot maximum
+
+// Paramètres horaires
+input int start_hour = 8;                 // Heure de début (Europe/Paris)
+input int end_hour = 22;                  // Heure de fin (Europe/Paris)
+
+//+------------------------------------------------------------------+
+//| Structures pour les signaux et filtres                          |
+//+------------------------------------------------------------------+
+struct SignalResult
+{
+    int signal_strength;     // Force du signal (0-4)
+    int direction;          // Direction: 1=Long, -1=Short, 0=Neutre
+    string active_signals;  // Liste des signaux actifs
+};
+
+struct FilterResult
+{
+    bool all_passed;        // Tous les filtres passés
+    string blocked_by;      // Filtre qui bloque
+    string context_data;    // Données contextuelles
+};
+
+// Symboles supportés
+string supported_symbols[] = {"BTCUSD", "ETHUSD", "SOLUSD"};
+
+//+------------------------------------------------------------------+
+//| Fonction de validation des symboles                             |
+//+------------------------------------------------------------------+
+bool IsValidSymbol(string symbol)
+{
+    for(int i = 0; i < ArraySize(supported_symbols); i++)
+    {
+        if(StringFind(symbol, supported_symbols[i]) >= 0)
+            return true;
+    }
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Fonction d'obtention de l'heure de Paris                        |
+//+------------------------------------------------------------------+
+datetime GetParisTime()
+{
+    return TimeCurrent();
+}
+
+//+------------------------------------------------------------------+
+//| Fonction de calcul de la taille de lot                          |
+//+------------------------------------------------------------------+
+double CalculateLotSize()
+{
+    CAccountInfo account;
+    double balance = account.Balance();
+    double risk_amount = balance * risk_per_trade / 100.0;
+
+    string current_symbol = Symbol();
+    double price = SymbolInfoDouble(current_symbol, SYMBOL_ASK);
+    double pip_value = SymbolInfoDouble(current_symbol, SYMBOL_TRADE_TICK_VALUE);
+    double stop_distance = price * stop_loss_pct / 100.0;
+
+    double lot_size = risk_amount / (stop_distance / SymbolInfoDouble(current_symbol, SYMBOL_POINT) * pip_value);
+
+    // Limites
+    if(lot_size < min_lot_size) lot_size = min_lot_size;
+    if(lot_size > max_lot_size) lot_size = max_lot_size;
+
+    return NormalizeDouble(lot_size, 2);
+}
+
+//+------------------------------------------------------------------+
+//| Initialisation du logging                                       |
+//+------------------------------------------------------------------+
+void InitializeLogging()
+{
+    string filename = "HERMES_" + TimeToString(TimeCurrent(), TIME_DATE) + ".log";
+    int log_handle = FileOpen(filename, FILE_WRITE | FILE_TXT | FILE_ANSI);
+}
+
+//+------------------------------------------------------------------+
+//| Fonction de logging                                             |
+//+------------------------------------------------------------------+
+void LogMessage(string type, string message)
+{
+    int log_handle = FileOpen("HERMES_" + TimeToString(TimeCurrent(), TIME_DATE) + ".log",
+                             FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_READ);
+    if(log_handle != INVALID_HANDLE)
+    {
+        FileSeek(log_handle, 0, SEEK_END);
+        string log_entry = StringFormat("[%s] %s: %s\n",
+                                      TimeToString(GetParisTime(), TIME_DATE | TIME_MINUTES),
+                                      type,
+                                      message);
+        FileWrite(log_handle, log_entry);
+        FileFlush(log_handle);
+        FileClose(log_handle);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Fonction de mise à jour des données d'indicateurs               |
+//+------------------------------------------------------------------+
+bool UpdateIndicatorData()
+{
+    // Déclaration des variables
+    extern int h1_ema21_handle, h1_ema55_handle;
+    extern int h1_smma50_handle, h1_smma200_handle;
+    extern int h4_smma200_handle, h4_rsi_handle;
+    extern double h1_ema21[], h1_ema55[];
+    extern double h1_smma50[], h1_smma200[];
+    extern double h4_smma200[], h4_rsi[];
+
+    // Copie des données
+    if(CopyBuffer(h1_ema21_handle, 0, 0, 3, h1_ema21) <= 0) return false;
+    if(CopyBuffer(h1_ema55_handle, 0, 0, 3, h1_ema55) <= 0) return false;
+    if(CopyBuffer(h1_smma50_handle, 0, 0, 3, h1_smma50) <= 0) return false;
+    if(CopyBuffer(h1_smma200_handle, 0, 0, 3, h1_smma200) <= 0) return false;
+    if(CopyBuffer(h4_smma200_handle, 0, 0, 3, h4_smma200) <= 0) return false;
+    if(CopyBuffer(h4_rsi_handle, 0, 0, 3, h4_rsi) <= 0) return false;
+
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Filtre horaire                                                  |
+//+------------------------------------------------------------------+
+bool CheckTimeFilter()
+{
+    MqlDateTime time_struct;
+    TimeToStruct(GetParisTime(), time_struct);
+    int current_hour = time_struct.hour;
+
+    return (current_hour >= start_hour && current_hour <= end_hour);
+}
+
+//+------------------------------------------------------------------+
+//| Signal Movement H1                                              |
+//+------------------------------------------------------------------+
+bool CheckMovementH1Signal()
+{
+    extern double h1_ema21[], h1_ema55[];
+
+    // Vérifie si les EMAs sont en mouvement ascendant ou descendant
+    bool ema21_rising = h1_ema21[0] > h1_ema21[1];
+    bool ema55_rising = h1_ema55[0] > h1_ema55[1];
+
+    return (ema21_rising && ema55_rising) || (!ema21_rising && !ema55_rising);
+}
+
+//+------------------------------------------------------------------+
+//| Signal Cross EMA21/55 H1                                        |
+//+------------------------------------------------------------------+
+int CheckEMACrossSignal()
+{
+    extern double h1_ema21[], h1_ema55[];
+
+    bool cross_up = (h1_ema21[0] > h1_ema55[0] && h1_ema21[1] <= h1_ema55[1]);
+    bool cross_down = (h1_ema21[0] < h1_ema55[0] && h1_ema21[1] >= h1_ema55[1]);
+
+    if(cross_up) return 1;   // Long
+    if(cross_down) return -1; // Short
+    return 0;                // Pas de signal
+}
+
+//+------------------------------------------------------------------+
+//| Signal Cross SMMA50/200 H1                                      |
+//+------------------------------------------------------------------+
+int CheckSMMACrossSignal()
+{
+    extern double h1_smma50[], h1_smma200[];
+
+    bool cross_up = (h1_smma50[0] > h1_smma200[0] && h1_smma50[1] <= h1_smma200[1]);
+    bool cross_down = (h1_smma50[0] < h1_smma200[0] && h1_smma50[1] >= h1_smma200[1]);
+
+    if(cross_up) return 1;   // Long
+    if(cross_down) return -1; // Short
+    return 0;                // Pas de signal
+}
+
+//+------------------------------------------------------------------+
+//| Signal Momentum M15                                             |
+//+------------------------------------------------------------------+
+int CheckMomentumM15Signal()
+{
+    string current_symbol = Symbol();
+    double close_current = iClose(current_symbol, PERIOD_M15, 0);
+    double close_previous = iClose(current_symbol, PERIOD_M15, 1);
+    double close_2 = iClose(current_symbol, PERIOD_M15, 2);
+
+    // Momentum basé sur 3 bougies consécutives
+    if(close_current > close_previous && close_previous > close_2)
+        return 1;  // Long
+    if(close_current < close_previous && close_previous < close_2)
+        return -1; // Short
+
+    return 0; // Pas de signal
+}
+
+//+------------------------------------------------------------------+
+//| Filtre Tendance H4                                              |
+//+------------------------------------------------------------------+
+bool CheckTrendH4Filter(int signal_direction)
+{
+    extern double h4_smma200[];
+    string current_symbol = Symbol();
+    double current_price = SymbolInfoDouble(current_symbol, SYMBOL_BID);
+
+    if(signal_direction > 0) // Long
+        return current_price > h4_smma200[0];
+    else if(signal_direction < 0) // Short
+        return current_price < h4_smma200[0];
+
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Filtre RSI H4                                                   |
+//+------------------------------------------------------------------+
+bool CheckRSIH4Filter(int signal_direction)
+{
+    extern double h4_rsi[];
+
+    if(signal_direction > 0) // Long
+        return h4_rsi[0] < rsi_overbought_h4;
+    else if(signal_direction < 0) // Short
+        return h4_rsi[0] > rsi_oversold_h4;
+
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Filtre d'exposition                                             |
+//+------------------------------------------------------------------+
+string CheckExposureFilter()
+{
+    if(!block_same_pair_on_off && !block_other_crypto_on_off)
+        return "";
+
+    string current_symbol = Symbol();
+    CPositionInfo position;
+
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        if(!position.SelectByIndex(i)) continue;
+        if(position.Magic() != HERMES_MAGIC) continue;
+
+        string pos_symbol = position.Symbol();
+
+        // Même paire
+        if(block_same_pair_on_off && pos_symbol == current_symbol)
+            return "FILTER_SAME_PAIR";
+
+        // Autres cryptos
+        if(block_other_crypto_on_off && pos_symbol != current_symbol)
+        {
+            for(int j = 0; j < ArraySize(supported_symbols); j++)
+            {
+                if(StringFind(pos_symbol, supported_symbols[j]) >= 0)
+                    return "FILTER_OTHER_CRYPTO";
+            }
+        }
+    }
+
+    return "";
+}
+
+//+------------------------------------------------------------------+
+//| Statut d'exposition                                             |
+//+------------------------------------------------------------------+
+string GetExposureStatus()
+{
+    int positions_count = 0;
+    string positions_list = "";
+    CPositionInfo position;
+
+    for(int i = 0; i < PositionsTotal(); i++)
+    {
+        if(!position.SelectByIndex(i)) continue;
+        if(position.Magic() != HERMES_MAGIC) continue;
+
+        positions_count++;
+        positions_list += position.Symbol() + " ";
+    }
+
+    return StringFormat("Positions actives: %d [%s]", positions_count, positions_list);
+}
+
+//+------------------------------------------------------------------+
+//| Filtre News (basique)                                           |
+//+------------------------------------------------------------------+
+string CheckNewsFilter()
+{
+    // Implémentation basique - peut être étendue
+    MqlDateTime time_struct;
+    TimeToStruct(GetParisTime(), time_struct);
+
+    // Éviter les heures de news importantes (exemple: 14h30-15h30 Paris)
+    if(time_struct.hour == 14 && time_struct.min >= 30)
+        return "News économiques US";
+    if(time_struct.hour == 15 && time_struct.min <= 30)
+        return "News économiques US";
+
+    return "";
+}
+
+//+------------------------------------------------------------------+
+//| Gestion du Break-Even                                           |
+//+------------------------------------------------------------------+
+bool ShouldApplyBreakEven()
+{
+    extern bool be_applied;
+    if(be_applied) return false;
+
+    string current_symbol = Symbol();
+    CPositionInfo position;
+    if(!position.Select(current_symbol)) return false;
+
+    double open_price = position.PriceOpen();
+    double current_price = (position.PositionType() == POSITION_TYPE_BUY) ?
+                          SymbolInfoDouble(current_symbol, SYMBOL_BID) :
+                          SymbolInfoDouble(current_symbol, SYMBOL_ASK);
+
+    double profit_pct = 0;
+    if(position.PositionType() == POSITION_TYPE_BUY)
+        profit_pct = (current_price - open_price) / open_price * 100.0;
+    else
+        profit_pct = (open_price - current_price) / open_price * 100.0;
+
+    return profit_pct >= be_trigger_pct;
+}
+
+//+------------------------------------------------------------------+
+//| Application du Break-Even                                       |
+//+------------------------------------------------------------------+
+bool ApplyBreakEven()
+{
+    string current_symbol = Symbol();
+    CPositionInfo position;
+    CTrade trade;
+
+    if(!position.Select(current_symbol)) return false;
+
+    double open_price = position.PriceOpen();
+
+    if(trade.PositionModify(position.Ticket(), open_price, position.TakeProfit()))
+    {
+        string be_msg = StringFormat("Break-Even appliqué à %.5f", open_price);
+        Print(be_msg);
+        LogMessage("BREAK_EVEN", be_msg);
+        return true;
+    }
+    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Logging des blocages                                            |
+//+------------------------------------------------------------------+
+void LogBlockage(SignalResult &signals, FilterResult &filters)
+{
+    string blockage_msg = StringFormat(
+        "=== SIGNAL BLOQUÉ ===\n" +
+        "Signaux: %s (Force: %d)\n" +
+        "Direction: %s\n" +
+        "Bloqué par: %s\n" +
+        "Contexte: %s\n" +
+        "Heure: %s",
+        signals.active_signals,
+        signals.signal_strength,
+        (signals.direction > 0) ? "LONG" : (signals.direction < 0) ? "SHORT" : "NEUTRE",
+        filters.blocked_by,
+        filters.context_data,
+        TimeToString(GetParisTime(), TIME_DATE | TIME_MINUTES)
+    );
+
+    LogMessage("BLOCKED", blockage_msg);
+}
+
+//+------------------------------------------------------------------+
+//| Texte de la raison d'arrêt                                     |
+//+------------------------------------------------------------------+
+string GetDeinitReasonText(int reason)
+{
+    switch(reason)
+    {
+        case REASON_PROGRAM: return "Expert recompilé";
+        case REASON_REMOVE: return "Expert retiré du graphique";
+        case REASON_RECOMPILE: return "Expert recompilé";
+        case REASON_CHARTCHANGE: return "Changement de graphique";
+        case REASON_CHARTCLOSE: return "Graphique fermé";
+        case REASON_PARAMETERS: return "Paramètres modifiés";
+        case REASON_ACCOUNT: return "Compte changé";
+        case REASON_TEMPLATE: return "Template appliqué";
+        case REASON_INITFAILED: return "Échec d'initialisation";
+        case REASON_CLOSE: return "Terminal fermé";
+        default: return "Raison inconnue";
+    }
+}
 
 //+------------------------------------------------------------------+
 //| Variables globales                                               |
@@ -173,9 +592,7 @@ void OnTick()
         last_h1_time = current_h1_time;
 
         // Mise à jour des données des indicateurs
-        if(!UpdateIndicatorData(h1_ema21_handle, h1_ema55_handle, h1_smma50_handle, h1_smma200_handle,
-                               h4_smma200_handle, h4_rsi_handle,
-                               h1_ema21, h1_ema55, h1_smma50, h1_smma200, h4_smma200, h4_rsi))
+        if(!UpdateIndicatorData())
         {
             LogMessage("ERROR", "Échec mise à jour des indicateurs");
             return;
@@ -231,14 +648,14 @@ SignalResult EvaluateSignals()
     result.active_signals = "";
 
     // 1. Signal Movement H1
-    if(CheckMovementH1Signal(h1_ema21, h1_ema55))
+    if(CheckMovementH1Signal())
     {
         result.signal_strength++;
         result.active_signals += "MOVEMENT_H1 ";
     }
 
     // 2. Signal Cross EMA21/55 H1
-    int ema_cross = CheckEMACrossSignal(h1_ema21, h1_ema55);
+    int ema_cross = CheckEMACrossSignal();
     if(ema_cross != 0)
     {
         result.signal_strength++;
@@ -247,7 +664,7 @@ SignalResult EvaluateSignals()
     }
 
     // 3. Signal Cross SMMA50/200 H1
-    int smma_cross = CheckSMMACrossSignal(h1_smma50, h1_smma200);
+    int smma_cross = CheckSMMACrossSignal();
     if(smma_cross != 0)
     {
         result.signal_strength++;
@@ -286,21 +703,24 @@ FilterResult EvaluateFilters(int signal_direction)
     result.context_data = "";
 
     // 1. Filtre Tendance H4
-    if(!CheckTrendH4Filter(signal_direction, h4_smma200))
+    if(!CheckTrendH4Filter(signal_direction))
     {
         result.all_passed = false;
         result.blocked_by = "FILTER_TREND_H4";
+        string current_symbol = Symbol();
         double current_price = SymbolInfoDouble(current_symbol, SYMBOL_BID);
+        extern double h4_smma200[];
         result.context_data = StringFormat("Prix=%.5f vs SMMA200_H4=%.5f",
                                          current_price, h4_smma200[0]);
         return result;
     }
 
     // 2. Filtre RSI H4
-    if(!CheckRSIH4Filter(signal_direction, h4_rsi))
+    if(!CheckRSIH4Filter(signal_direction))
     {
         result.all_passed = false;
         result.blocked_by = "FILTER_RSI_H4";
+        extern double h4_rsi[];
         result.context_data = StringFormat("RSI_H4=%.1f | Seuils=[%d-%d]",
                                          h4_rsi[0], rsi_oversold_h4, rsi_overbought_h4);
         return result;
@@ -349,7 +769,7 @@ void ManageExistingPositions()
             continue;
 
         // Gestion du Break-Even
-        if(!be_applied && ShouldApplyBreakEven(be_applied))
+        if(!be_applied && ShouldApplyBreakEven())
         {
             if(ApplyBreakEven())
             {
