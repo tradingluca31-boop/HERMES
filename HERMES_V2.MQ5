@@ -2,6 +2,51 @@
 //|                                                    HERMES_V2.MQ5 |
 //|                              Algo Momentum Following BTC/ETH/SOL |
 //+------------------------------------------------------------------+
+#property indicator_chart_window
+#property indicator_buffers 8
+#property indicator_plots   8
+
+// Indicateurs H1
+#property indicator_label1  "EMA21_H1"
+#property indicator_type1   DRAW_LINE
+#property indicator_color1  clrBlue
+#property indicator_width1  2
+
+#property indicator_label2  "EMA55_H1"
+#property indicator_type2   DRAW_LINE
+#property indicator_color2  clrRed
+#property indicator_width2  2
+
+#property indicator_label3  "SMMA50_H1"
+#property indicator_type3   DRAW_LINE
+#property indicator_color3  clrGreen
+#property indicator_width3  2
+
+#property indicator_label4  "SMMA200_H1"
+#property indicator_type4   DRAW_LINE
+#property indicator_color4  clrDarkGreen
+#property indicator_width4  3
+
+// Indicateurs M15
+#property indicator_label5  "EMA21_M15"
+#property indicator_type5   DRAW_LINE
+#property indicator_color5  clrCyan
+#property indicator_width5  1
+
+#property indicator_label6  "EMA55_M15"
+#property indicator_type6   DRAW_LINE
+#property indicator_color6  clrMagenta
+#property indicator_width6  1
+
+#property indicator_label7  "SMMA14_M15"
+#property indicator_type7   DRAW_LINE
+#property indicator_color7  clrYellow
+#property indicator_width7  1
+
+#property indicator_label8  "SMMA28_M15"
+#property indicator_type8   DRAW_LINE
+#property indicator_color8  clrOrange
+#property indicator_width8  1
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -63,13 +108,23 @@ int h4_smma200_handle, h4_rsi_handle;
 int m15_ema21_handle, m15_ema55_handle;
 int m15_smma14_handle, m15_smma28_handle;
 
-// Buffers indicateurs
+// Buffers indicateurs (calcul)
 double h1_ema21[], h1_ema55[];
 double h1_smma50[], h1_smma200[];
 double h4_smma200[], h4_rsi[];
-// Nouveaux buffers M15
+// Nouveaux buffers M15 (calcul)
 double m15_ema21[], m15_ema55[];
 double m15_smma14[], m15_smma28[];
+
+// Buffers d'affichage pour graphique
+double display_ema21_h1[];
+double display_ema55_h1[];
+double display_smma50_h1[];
+double display_smma200_h1[];
+double display_ema21_m15[];
+double display_ema55_m15[];
+double display_smma14_m15[];
+double display_smma28_m15[];
 
 // Variables de gestion
 bool be_applied = false;
@@ -714,17 +769,37 @@ int OnInit()
         return INIT_FAILED;
     }
 
+    // Configuration des buffers de calcul
     ArraySetAsSeries(h1_ema21, true);
     ArraySetAsSeries(h1_ema55, true);
     ArraySetAsSeries(h1_smma50, true);
     ArraySetAsSeries(h1_smma200, true);
     ArraySetAsSeries(h4_smma200, true);
     ArraySetAsSeries(h4_rsi, true);
-    // Nouveaux buffers M15
     ArraySetAsSeries(m15_ema21, true);
     ArraySetAsSeries(m15_ema55, true);
     ArraySetAsSeries(m15_smma14, true);
     ArraySetAsSeries(m15_smma28, true);
+
+    // Configuration des buffers d'affichage
+    SetIndexBuffer(0, display_ema21_h1, INDICATOR_DATA);
+    SetIndexBuffer(1, display_ema55_h1, INDICATOR_DATA);
+    SetIndexBuffer(2, display_smma50_h1, INDICATOR_DATA);
+    SetIndexBuffer(3, display_smma200_h1, INDICATOR_DATA);
+    SetIndexBuffer(4, display_ema21_m15, INDICATOR_DATA);
+    SetIndexBuffer(5, display_ema55_m15, INDICATOR_DATA);
+    SetIndexBuffer(6, display_smma14_m15, INDICATOR_DATA);
+    SetIndexBuffer(7, display_smma28_m15, INDICATOR_DATA);
+
+    // Configuration des séries
+    ArraySetAsSeries(display_ema21_h1, true);
+    ArraySetAsSeries(display_ema55_h1, true);
+    ArraySetAsSeries(display_smma50_h1, true);
+    ArraySetAsSeries(display_smma200_h1, true);
+    ArraySetAsSeries(display_ema21_m15, true);
+    ArraySetAsSeries(display_ema55_m15, true);
+    ArraySetAsSeries(display_smma14_m15, true);
+    ArraySetAsSeries(display_smma28_m15, true);
 
     string start_msg = StringFormat(
         "HERMES V2 DÉMARRÉ: %s | 5 SIGNAUX | Min=%d/5 | R:R=1:5 | SL=%.2f%% | TP=%.2f%% | BE=%.2f%% | Trading=%d:00-%d:00 | SMMA_Filter=%d",
@@ -762,6 +837,58 @@ void OnDeinit(const int reason)
     }
 
     Print("HERMES V2 arrêté");
+}
+
+//+------------------------------------------------------------------+
+//| Fonction OnCalculate pour affichage des indicateurs            |
+//+------------------------------------------------------------------+
+int OnCalculate(const int rates_total,
+                const int prev_calculated,
+                const datetime &time[],
+                const double &open[],
+                const double &high[],
+                const double &low[],
+                const double &close[],
+                const long &tick_volume[],
+                const long &volume[],
+                const int &spread[])
+{
+    if(rates_total < 200) return 0; // Pas assez de données
+
+    int limit = rates_total - prev_calculated;
+    if(limit > rates_total - 200) limit = rates_total - 200;
+
+    // Mise à jour des buffers d'affichage avec les données des indicateurs
+    for(int i = limit - 1; i >= 0; i--)
+    {
+        // Copie des données H1 vers buffers d'affichage
+        if(CopyBuffer(h1_ema21_handle, 0, time[i], 1, h1_ema21) > 0)
+            display_ema21_h1[i] = h1_ema21[0];
+
+        if(CopyBuffer(h1_ema55_handle, 0, time[i], 1, h1_ema55) > 0)
+            display_ema55_h1[i] = h1_ema55[0];
+
+        if(CopyBuffer(h1_smma50_handle, 0, time[i], 1, h1_smma50) > 0)
+            display_smma50_h1[i] = h1_smma50[0];
+
+        if(CopyBuffer(h1_smma200_handle, 0, time[i], 1, h1_smma200) > 0)
+            display_smma200_h1[i] = h1_smma200[0];
+
+        // Copie des données M15 vers buffers d'affichage
+        if(CopyBuffer(m15_ema21_handle, 0, time[i], 1, m15_ema21) > 0)
+            display_ema21_m15[i] = m15_ema21[0];
+
+        if(CopyBuffer(m15_ema55_handle, 0, time[i], 1, m15_ema55) > 0)
+            display_ema55_m15[i] = m15_ema55[0];
+
+        if(CopyBuffer(m15_smma14_handle, 0, time[i], 1, m15_smma14) > 0)
+            display_smma14_m15[i] = m15_smma14[0];
+
+        if(CopyBuffer(m15_smma28_handle, 0, time[i], 1, m15_smma28) > 0)
+            display_smma28_m15[i] = m15_smma28[0];
+    }
+
+    return rates_total;
 }
 
 void OnTick()
