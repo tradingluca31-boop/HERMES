@@ -10,6 +10,11 @@
 #property description "Date de création: 22 septembre 2025"
 #property description "Ratio R:R 1:5 | SL 0.70% | TP 3.50% | Break-Even +1R"
 
+#include <Trade/Trade.mqh>
+#include <Trade/PositionInfo.mqh>
+#include <Trade/SymbolInfo.mqh>
+#include <Trade/AccountInfo.mqh>
+
 #include "HermesConfig.mqh"
 #include "HermesUtils.mqh"
 
@@ -168,7 +173,9 @@ void OnTick()
         last_h1_time = current_h1_time;
 
         // Mise à jour des données des indicateurs
-        if(!UpdateIndicatorData())
+        if(!UpdateIndicatorData(h1_ema21_handle, h1_ema55_handle, h1_smma50_handle, h1_smma200_handle,
+                               h4_smma200_handle, h4_rsi_handle,
+                               h1_ema21, h1_ema55, h1_smma50, h1_smma200, h4_smma200, h4_rsi))
         {
             LogMessage("ERROR", "Échec mise à jour des indicateurs");
             return;
@@ -224,14 +231,14 @@ SignalResult EvaluateSignals()
     result.active_signals = "";
 
     // 1. Signal Movement H1
-    if(CheckMovementH1Signal())
+    if(CheckMovementH1Signal(h1_ema21, h1_ema55))
     {
         result.signal_strength++;
         result.active_signals += "MOVEMENT_H1 ";
     }
 
     // 2. Signal Cross EMA21/55 H1
-    int ema_cross = CheckEMACrossSignal();
+    int ema_cross = CheckEMACrossSignal(h1_ema21, h1_ema55);
     if(ema_cross != 0)
     {
         result.signal_strength++;
@@ -240,7 +247,7 @@ SignalResult EvaluateSignals()
     }
 
     // 3. Signal Cross SMMA50/200 H1
-    int smma_cross = CheckSMMACrossSignal();
+    int smma_cross = CheckSMMACrossSignal(h1_smma50, h1_smma200);
     if(smma_cross != 0)
     {
         result.signal_strength++;
@@ -279,7 +286,7 @@ FilterResult EvaluateFilters(int signal_direction)
     result.context_data = "";
 
     // 1. Filtre Tendance H4
-    if(!CheckTrendH4Filter(signal_direction))
+    if(!CheckTrendH4Filter(signal_direction, h4_smma200))
     {
         result.all_passed = false;
         result.blocked_by = "FILTER_TREND_H4";
@@ -290,7 +297,7 @@ FilterResult EvaluateFilters(int signal_direction)
     }
 
     // 2. Filtre RSI H4
-    if(!CheckRSIH4Filter(signal_direction))
+    if(!CheckRSIH4Filter(signal_direction, h4_rsi))
     {
         result.all_passed = false;
         result.blocked_by = "FILTER_RSI_H4";
@@ -342,9 +349,12 @@ void ManageExistingPositions()
             continue;
 
         // Gestion du Break-Even
-        if(!be_applied && ShouldApplyBreakEven())
+        if(!be_applied && ShouldApplyBreakEven(be_applied))
         {
-            ApplyBreakEven();
+            if(ApplyBreakEven())
+            {
+                be_applied = true;
+            }
         }
     }
 }
