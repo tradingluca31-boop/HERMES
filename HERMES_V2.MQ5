@@ -29,6 +29,9 @@ input int signal_validity_hours = 3;            // Validité signal en heures
 input int rsi_overbought_h4 = 80;               // RSI H4 sur-acheté
 input int rsi_oversold_h4 = 20;                 // RSI H4 sur-vendu
 
+// Filtre SMMA pour optimisation
+input int smma_filter_period = 200;             // Période SMMA filtre (plus souple que 50)
+
 // Filtres d'exposition
 input bool block_same_pair_on_off = true;       // Bloquer même crypto
 input bool block_other_crypto_on_off = true;    // Bloquer autres cryptos
@@ -375,15 +378,15 @@ bool IsSMMAM15DirectionValid()
 //| FILTRES D'EXCLUSION                                             |
 //+------------------------------------------------------------------+
 
-// 1. Tendance H4 (SMMA200)
+// 1. Tendance H4 (SMMA variable - plus souple)
 bool CheckTrendH4Filter(int direction)
 {
     double current_price = SymbolInfoDouble(current_symbol, SYMBOL_BID);
 
-    if(direction > 0) // Long uniquement si cours > SMMA200 H4
-        return current_price > h4_smma200[0];
-    else if(direction < 0) // Short uniquement si cours < SMMA200 H4
-        return current_price < h4_smma200[0];
+    if(direction > 0) // Long uniquement si cours > SMMA H4
+        return current_price > h4_smma200[0];  // Utilise la SMMA configurable
+    else if(direction < 0) // Short uniquement si cours < SMMA H4
+        return current_price < h4_smma200[0];  // Utilise la SMMA configurable
 
     return true;
 }
@@ -553,7 +556,7 @@ string EvaluateEntry()
     if(!CheckTrendH4Filter(final_direction))
     {
         LogEntry("BLOCAGE: FILTER_TREND_H4 - Prix=" + DoubleToString(SymbolInfoDouble(current_symbol, SYMBOL_BID), 5) +
-                " vs SMMA200_H4=" + DoubleToString(h4_smma200[0], 5));
+                " vs SMMA" + IntegerToString(smma_filter_period) + "_H4=" + DoubleToString(h4_smma200[0], 5));
         return "";
     }
 
@@ -722,7 +725,7 @@ int OnInit()
     h1_smma200_handle = iMA(current_symbol, PERIOD_H1, 200, 0, MODE_SMMA, PRICE_CLOSE);
 
     // Initialisation indicateurs H4
-    h4_smma200_handle = iMA(current_symbol, PERIOD_H4, 200, 0, MODE_SMMA, PRICE_CLOSE);
+    h4_smma200_handle = iMA(current_symbol, PERIOD_H4, smma_filter_period, 0, MODE_SMMA, PRICE_CLOSE);
     h4_rsi_handle = iRSI(current_symbol, PERIOD_H4, 14, PRICE_CLOSE);
 
     // Initialisation nouveaux indicateurs M15
@@ -754,8 +757,8 @@ int OnInit()
     ArraySetAsSeries(m15_smma28, true);
 
     string start_msg = StringFormat(
-        "HERMES V2 DÉMARRÉ: %s | 6 SIGNAUX | Min=%d/6 | R:R=1:5 | SL=%.2f%% | TP=%.2f%% | BE=%.2f%% | Trading=%d:00-%d:00",
-        current_symbol, min_signals_required, stop_loss_pct, take_profit_pct, be_trigger_pct, trading_start_hour, trading_end_hour
+        "HERMES V2 DÉMARRÉ: %s | 6 SIGNAUX | Min=%d/6 | R:R=1:5 | SL=%.2f%% | TP=%.2f%% | BE=%.2f%% | Trading=%d:00-%d:00 | SMMA_Filter=%d",
+        current_symbol, min_signals_required, stop_loss_pct, take_profit_pct, be_trigger_pct, trading_start_hour, trading_end_hour, smma_filter_period
     );
 
     Print(start_msg);
