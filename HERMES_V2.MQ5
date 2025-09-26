@@ -21,6 +21,10 @@ input double be_trigger_pct = 0.70;             // Break-Even trigger (%)
 input double movement_threshold_h1 = 0.50;      // Mouvement H1 minimum (%)
 input double m15_momentum_threshold = 0.50;     // Momentum M15 minimum (%)
 
+// Système de validation flexible
+input int min_signals_required = 2;             // Minimum signaux requis (2-4)
+input int signal_validity_hours = 3;            // Validité signal en heures
+
 // Filtres RSI
 input int rsi_overbought_h4 = 80;               // RSI H4 sur-acheté
 input int rsi_oversold_h4 = 20;                 // RSI H4 sur-vendu
@@ -63,6 +67,16 @@ double h4_smma200[], h4_rsi[];
 bool be_applied = false;
 string current_symbol = "";
 int log_handle = INVALID_HANDLE;
+
+// Système de suivi des signaux
+datetime last_ema_cross_time = 0;
+datetime last_smma_cross_time = 0;
+datetime last_movement_time = 0;
+datetime last_momentum_time = 0;
+int last_ema_direction = 0;
+int last_smma_direction = 0;
+bool last_movement_valid = false;
+int last_momentum_direction = 0;
 
 // Cryptos supportées
 string supported_cryptos[] = {"BTCUSD", "ETHUSD", "SOLUSD"};
@@ -135,49 +149,72 @@ bool UpdateIndicatorData()
 }
 
 //+------------------------------------------------------------------+
-//| SIGNAUX D'ENTRÉE                                                |
+//| SIGNAUX D'ENTRÉE AVEC SUIVI FLEXIBLE                           |
 //+------------------------------------------------------------------+
 
 // 1. Mouvement H1 minimum
-bool CheckMovementH1()
+void CheckMovementH1()
 {
     double open = iOpen(current_symbol, PERIOD_H1, 1);
     double close = iClose(current_symbol, PERIOD_H1, 1);
     double movement_pct = MathAbs(close - open) / open * 100.0;
 
-    return movement_pct >= movement_threshold_h1;
+    if(movement_pct >= movement_threshold_h1)
+    {
+        last_movement_valid = true;
+        last_movement_time = GetParisTime();
+        LogEntry("SIGNAL: MOVEMENT_H1 validé - " + DoubleToString(movement_pct, 2) + "%");
+    }
 }
 
-// 2. Cross EMA21/55 H1
-int CheckEMACross()
+// 2. Cross EMA21/55 H1 (EMA21 guide la dynamique)
+void CheckEMACross()
 {
+    // Détection du cross
+    int current_cross = 0;
+
     // Long: EMA21 croise au-dessus d'EMA55
     if(h1_ema21[0] > h1_ema55[0] && h1_ema21[1] <= h1_ema55[1])
-        return 1;
+        current_cross = 1;
 
     // Short: EMA21 croise en-dessous d'EMA55
-    if(h1_ema21[0] < h1_ema55[0] && h1_ema21[1] >= h1_ema55[1])
-        return -1;
+    else if(h1_ema21[0] < h1_ema55[0] && h1_ema21[1] >= h1_ema55[1])
+        current_cross = -1;
 
-    return 0;
+    if(current_cross != 0)
+    {
+        last_ema_direction = current_cross;
+        last_ema_cross_time = GetParisTime();
+        string direction = current_cross > 0 ? "LONG" : "SHORT";
+        LogEntry("SIGNAL: EMA21/55 CROSS " + direction + " - EMA21 guide la dynamique");
+    }
 }
 
-// 3. Cross SMMA50/200 H1
-int CheckSMMACross()
+// 3. Cross SMMA50/200 H1 (SMMA50 guide le trend - suit mieux le prix)
+void CheckSMMACross()
 {
+    // Détection du cross
+    int current_cross = 0;
+
     // Long: SMMA50 croise au-dessus de SMMA200
     if(h1_smma50[0] > h1_smma200[0] && h1_smma50[1] <= h1_smma200[1])
-        return 1;
+        current_cross = 1;
 
     // Short: SMMA50 croise en-dessous de SMMA200
-    if(h1_smma50[0] < h1_smma200[0] && h1_smma50[1] >= h1_smma200[1])
-        return -1;
+    else if(h1_smma50[0] < h1_smma200[0] && h1_smma50[1] >= h1_smma200[1])
+        current_cross = -1;
 
-    return 0;
+    if(current_cross != 0)
+    {
+        last_smma_direction = current_cross;
+        last_smma_cross_time = GetParisTime();
+        string direction = current_cross > 0 ? "LONG" : "SHORT";
+        LogEntry("SIGNAL: SMMA50/200 CROSS " + direction + " - SMMA50 suit le prix");
+    }
 }
 
 // 4. Momentum M15
-int CheckMomentumM15()
+void CheckMomentumM15()
 {
     double open = iOpen(current_symbol, PERIOD_M15, 1);
     double close = iClose(current_symbol, PERIOD_M15, 1);
@@ -185,10 +222,60 @@ int CheckMomentumM15()
 
     if(MathAbs(momentum_pct) >= m15_momentum_threshold)
     {
-        return momentum_pct > 0 ? 1 : -1;
+        last_momentum_direction = momentum_pct > 0 ? 1 : -1;
+        last_momentum_time = GetParisTime();
+        string direction = last_momentum_direction > 0 ? "LONG" : "SHORT";
+        LogEntry("SIGNAL: MOMENTUM_M15 " + direction + " - " + DoubleToString(momentum_pct, 2) + "%");
     }
+}
 
-    return 0;
+//+------------------------------------------------------------------+
+//| VALIDATION FLEXIBLE DES SIGNAUX                                 |
+//+------------------------------------------------------------------+
+bool IsSignalStillValid(datetime signal_time)
+{
+    if(signal_time == 0) return false;
+
+    datetime current_time = GetParisTime();
+    int hours_elapsed = (int)((current_time - signal_time) / 3600);
+
+    return hours_elapsed <= signal_validity_hours;
+}
+
+bool IsEMADirectionValid()
+{
+    if(!IsSignalStillValid(last_ema_cross_time)) return false;
+
+    // Vérification que EMA21 suit toujours la direction
+    if(last_ema_direction > 0)
+        return h1_ema21[0] > h1_ema55[0];  // EMA21 toujours au-dessus
+    else if(last_ema_direction < 0)
+        return h1_ema21[0] < h1_ema55[0];  // EMA21 toujours en-dessous
+
+    return false;
+}
+
+bool IsSMMADirectionValid()
+{
+    if(!IsSignalStillValid(last_smma_cross_time)) return false;
+
+    // Vérification que SMMA50 suit toujours la direction
+    if(last_smma_direction > 0)
+        return h1_smma50[0] > h1_smma200[0];  // SMMA50 toujours au-dessus
+    else if(last_smma_direction < 0)
+        return h1_smma50[0] < h1_smma200[0];  // SMMA50 toujours en-dessous
+
+    return false;
+}
+
+bool IsMovementValid()
+{
+    return IsSignalStillValid(last_movement_time) && last_movement_valid;
+}
+
+bool IsMomentumValid()
+{
+    return IsSignalStillValid(last_momentum_time) && last_momentum_direction != 0;
 }
 
 //+------------------------------------------------------------------+
@@ -283,46 +370,73 @@ string CheckNewsFilter()
 }
 
 //+------------------------------------------------------------------+
-//| ÉVALUATION COMPLÈTE                                             |
+//| ÉVALUATION FLEXIBLE DES SIGNAUX                                 |
 //+------------------------------------------------------------------+
 string EvaluateEntry()
 {
-    // Vérification de tous les signaux
-    if(!CheckMovementH1())
-        return "";
+    // Mise à jour des signaux (détection nouveaux cross/mouvements)
+    CheckMovementH1();
+    CheckEMACross();
+    CheckSMMACross();
+    CheckMomentumM15();
 
-    int ema_signal = CheckEMACross();
-    int smma_signal = CheckSMMACross();
-    int momentum_signal = CheckMomentumM15();
+    // Vérification des signaux valides actuellement
+    bool ema_valid = IsEMADirectionValid();
+    bool smma_valid = IsSMMADirectionValid();
+    bool movement_valid = IsMovementValid();
+    bool momentum_valid = IsMomentumValid();
 
-    // Détermine la direction principale
-    int direction = 0;
+    // Comptage des signaux actifs
+    int active_signals_count = 0;
+    int direction_sum = 0;
     string active_signals = "";
 
-    if(ema_signal != 0)
+    if(ema_valid)
     {
-        direction += ema_signal;
-        active_signals += ema_signal > 0 ? "EMA_LONG " : "EMA_SHORT ";
+        active_signals_count++;
+        direction_sum += last_ema_direction;
+        active_signals += last_ema_direction > 0 ? "EMA21_LONG " : "EMA21_SHORT ";
     }
 
-    if(smma_signal != 0)
+    if(smma_valid)
     {
-        direction += smma_signal;
-        active_signals += smma_signal > 0 ? "SMMA_LONG " : "SMMA_SHORT ";
+        active_signals_count++;
+        direction_sum += last_smma_direction;
+        active_signals += last_smma_direction > 0 ? "SMMA50_LONG " : "SMMA50_SHORT ";
     }
 
-    if(momentum_signal != 0)
+    if(movement_valid)
     {
-        direction += momentum_signal;
-        active_signals += momentum_signal > 0 ? "MOM_LONG " : "MOM_SHORT ";
+        active_signals_count++;
+        active_signals += "MOVEMENT_H1 ";
     }
 
-    // Pas assez de signaux
-    if(active_signals == "") return "";
+    if(momentum_valid)
+    {
+        active_signals_count++;
+        direction_sum += last_momentum_direction;
+        active_signals += last_momentum_direction > 0 ? "MOM_M15_LONG " : "MOM_M15_SHORT ";
+    }
 
-    // Normalise la direction
-    int final_direction = direction > 0 ? 1 : (direction < 0 ? -1 : 0);
-    if(final_direction == 0) return "";
+    // Vérification minimum de signaux requis
+    if(active_signals_count < min_signals_required)
+    {
+        if(active_signals_count > 0)
+        {
+            LogEntry("SIGNAUX INSUFFISANTS: " + IntegerToString(active_signals_count) + "/" + IntegerToString(min_signals_required) + " - Signaux: " + active_signals);
+        }
+        return "";
+    }
+
+    // Détermination direction finale
+    int final_direction = direction_sum > 0 ? 1 : (direction_sum < 0 ? -1 : 0);
+    if(final_direction == 0)
+    {
+        LogEntry("DIRECTION INDÉTERMINÉE: Signaux contradictoires - " + active_signals);
+        return "";
+    }
+
+    LogEntry("SIGNAUX VALIDÉS: " + IntegerToString(active_signals_count) + "/4 - Direction: " + (final_direction > 0 ? "LONG" : "SHORT") + " - " + active_signals);
 
     // Vérification de tous les filtres
     if(!CheckTrendH4Filter(final_direction))
@@ -363,6 +477,7 @@ string EvaluateEntry()
 
     // Tous les filtres passés !
     string direction_str = final_direction > 0 ? "LONG" : "SHORT";
+    LogEntry("ENTRÉE VALIDÉE: " + direction_str + " avec " + IntegerToString(active_signals_count) + " signaux");
     return direction_str + ":" + active_signals;
 }
 
