@@ -39,6 +39,7 @@ input double m15_momentum_threshold = 0.50;     // Momentum M15 minimum (%)
 //=== SYSTÈME DE VALIDATION ===
 input int min_signals_required = 4;             // Minimum signaux requis (4/5)
 input int signal_validity_hours = 3;            // Validité signal en heures
+input double min_direction_consensus = 75.0;    // % minimum même direction (75% = 3/4 signaux)
 
 //=== FILTRES RSI H4 ===
 input int rsi_overbought_h4 = 80;               // RSI H4 sur-acheté
@@ -337,7 +338,18 @@ bool IsSMMADirectionValid()
 
 bool IsMomentumValid()
 {
-    return IsSignalStillValid(last_momentum_time) && last_momentum_direction != 0;
+    if(!IsSignalStillValid(last_momentum_time) || last_momentum_direction == 0) return false;
+
+    // Vérification que le momentum continue dans la même direction
+    double current_open = iOpen(current_symbol, PERIOD_M15, 1);
+    double current_close = iClose(current_symbol, PERIOD_M15, 1);
+    double current_momentum_pct = (current_close - current_open) / current_open * 100.0;
+
+    // Le momentum doit être dans la même direction ET suffisant
+    if(last_momentum_direction > 0)
+        return current_momentum_pct >= m15_momentum_threshold;
+    else
+        return current_momentum_pct <= -m15_momentum_threshold;
 }
 
 bool IsEMAM15DirectionValid()
@@ -542,15 +554,34 @@ string EvaluateEntry()
         return "";
     }
 
-    // Détermination direction finale
-    int final_direction = direction_sum > 0 ? 1 : (direction_sum < 0 ? -1 : 0);
+    // LOGIQUE STRICTE: Détermination direction finale
+    // Au lieu d'une simple somme, on exige une direction majoritaire claire
+    int long_signals = 0;
+    int short_signals = 0;
+
+    if(ema_h1_valid) last_ema_direction > 0 ? long_signals++ : short_signals++;
+    if(smma_h1_valid) last_smma_direction > 0 ? long_signals++ : short_signals++;
+    if(momentum_valid) last_momentum_direction > 0 ? long_signals++ : short_signals++;
+    if(ema_m15_valid) last_ema_m15_direction > 0 ? long_signals++ : short_signals++;
+    if(smma_m15_valid) last_smma_m15_direction > 0 ? long_signals++ : short_signals++;
+
+    // Exiger une majorité claire (configurable, par défaut 75%)
+    int total_directional_signals = long_signals + short_signals;
+    double long_percentage = (double)long_signals / total_directional_signals * 100.0;
+    double short_percentage = (double)short_signals / total_directional_signals * 100.0;
+
+    int final_direction = 0;
+    if(long_percentage >= min_direction_consensus) final_direction = 1;
+    else if(short_percentage >= min_direction_consensus) final_direction = -1;
+
     if(final_direction == 0)
     {
-        LogEntry("DIRECTION INDÉTERMINÉE: Signaux contradictoires - " + active_signals);
+        LogEntry("DIRECTION INDÉTERMINÉE: Signaux contradictoires - Long:" + IntegerToString(long_signals) + " Short:" + IntegerToString(short_signals) + " - " + active_signals);
         return "";
     }
 
-    LogEntry("SIGNAUX VALIDÉS: " + IntegerToString(active_signals_count) + "/5 - Direction: " + (final_direction > 0 ? "LONG" : "SHORT") + " - " + active_signals);
+    LogEntry("SIGNAUX VALIDÉS: " + IntegerToString(active_signals_count) + "/5 - Direction: " + (final_direction > 0 ? "LONG" : "SHORT") +
+             " (" + DoubleToString(final_direction > 0 ? long_percentage : short_percentage, 1) + "% consensus) - " + active_signals);
 
     // Vérification de tous les filtres
     if(!CheckTrendH4Filter(final_direction))
