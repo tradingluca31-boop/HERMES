@@ -18,11 +18,10 @@ input double take_profit_pct = 3.50;            // Take Profit (%)
 input double be_trigger_pct = 0.70;             // Break-Even trigger (%)
 
 // Seuils de signaux
-input double movement_threshold_h1 = 0.50;      // Mouvement H1 minimum (%)
 input double m15_momentum_threshold = 0.50;     // Momentum M15 minimum (%)
 
 // Système de validation flexible
-input int min_signals_required = 4;             // Minimum signaux requis (4/6)
+input int min_signals_required = 4;             // Minimum signaux requis (4/5)
 input int signal_validity_hours = 3;            // Validité signal en heures
 
 // Filtres RSI
@@ -77,14 +76,12 @@ bool be_applied = false;
 string current_symbol = "";
 int log_handle = INVALID_HANDLE;
 
-// Système de suivi des signaux
+// Système de suivi des signaux (5 signaux)
 datetime last_ema_cross_time = 0;
 datetime last_smma_cross_time = 0;
-datetime last_movement_time = 0;
 datetime last_momentum_time = 0;
 int last_ema_direction = 0;
 int last_smma_direction = 0;
-bool last_movement_valid = false;
 int last_momentum_direction = 0;
 // Nouveaux signaux M15
 datetime last_ema_m15_cross_time = 0;
@@ -173,25 +170,10 @@ bool UpdateIndicatorData()
 }
 
 //+------------------------------------------------------------------+
-//| SIGNAUX D'ENTRÉE AVEC SUIVI FLEXIBLE                           |
+//| SIGNAUX D'ENTRÉE AVEC SUIVI FLEXIBLE (5 SIGNAUX)              |
 //+------------------------------------------------------------------+
 
-// 1. Mouvement H1 minimum
-void CheckMovementH1()
-{
-    double open = iOpen(current_symbol, PERIOD_H1, 1);
-    double close = iClose(current_symbol, PERIOD_H1, 1);
-    double movement_pct = MathAbs(close - open) / open * 100.0;
-
-    if(movement_pct >= movement_threshold_h1)
-    {
-        last_movement_valid = true;
-        last_movement_time = GetParisTime();
-        LogEntry("SIGNAL: MOVEMENT_H1 validé - " + DoubleToString(movement_pct, 2) + "%");
-    }
-}
-
-// 2. Cross EMA21/55 H1 (EMA21 guide la dynamique)
+// 1. Cross EMA21/55 H1 (EMA21 guide la dynamique)
 void CheckEMACross()
 {
     // Détection du cross
@@ -214,7 +196,7 @@ void CheckEMACross()
     }
 }
 
-// 3. Cross SMMA50/200 H1 (SMMA50 guide le trend - suit mieux le prix)
+// 2. Cross SMMA50/200 H1 (SMMA50 guide le trend - suit mieux le prix)
 void CheckSMMACross()
 {
     // Détection du cross
@@ -237,7 +219,7 @@ void CheckSMMACross()
     }
 }
 
-// 4. Momentum M15
+// 3. Momentum M15
 void CheckMomentumM15()
 {
     double open = iOpen(current_symbol, PERIOD_M15, 1);
@@ -253,7 +235,7 @@ void CheckMomentumM15()
     }
 }
 
-// 5. Cross EMA21/55 M15 (EMA21 guide la dynamique)
+// 4. Cross EMA21/55 M15 (EMA21 guide la dynamique)
 void CheckEMACrossM15()
 {
     // Détection du cross M15
@@ -276,7 +258,7 @@ void CheckEMACrossM15()
     }
 }
 
-// 6. Cross SMMA14/28 M15 (SMMA14 guide - plus petite moyenne)
+// 5. Cross SMMA14/28 M15 (SMMA14 guide - plus petite moyenne)
 void CheckSMMACrossM15()
 {
     // Détection du cross M15
@@ -338,10 +320,6 @@ bool IsSMMADirectionValid()
     return false;
 }
 
-bool IsMovementValid()
-{
-    return IsSignalStillValid(last_movement_time) && last_movement_valid;
-}
 
 bool IsMomentumValid()
 {
@@ -471,22 +449,20 @@ string CheckNewsFilter()
 string EvaluateEntry()
 {
     // Mise à jour des signaux (détection nouveaux cross/mouvements)
-    CheckMovementH1();
     CheckEMACross();
     CheckSMMACross();
     CheckMomentumM15();
-    CheckEMACrossM15();      // Nouveau signal M15
-    CheckSMMACrossM15();     // Nouveau signal M15
+    CheckEMACrossM15();      // Signal M15
+    CheckSMMACrossM15();     // Signal M15
 
-    // Vérification des signaux valides actuellement
+    // Vérification des signaux valides actuellement (5 signaux)
     bool ema_h1_valid = IsEMADirectionValid();
     bool smma_h1_valid = IsSMMADirectionValid();
-    bool movement_valid = IsMovementValid();
     bool momentum_valid = IsMomentumValid();
-    bool ema_m15_valid = IsEMAM15DirectionValid();      // Nouveau
-    bool smma_m15_valid = IsSMMAM15DirectionValid();    // Nouveau
+    bool ema_m15_valid = IsEMAM15DirectionValid();
+    bool smma_m15_valid = IsSMMAM15DirectionValid();
 
-    // Comptage des signaux actifs (6 signaux total)
+    // Comptage des signaux actifs (5 signaux total)
     int active_signals_count = 0;
     int direction_sum = 0;
     string active_signals = "";
@@ -503,12 +479,6 @@ string EvaluateEntry()
         active_signals_count++;
         direction_sum += last_smma_direction;
         active_signals += last_smma_direction > 0 ? "SMMA50_H1_LONG " : "SMMA50_H1_SHORT ";
-    }
-
-    if(movement_valid)
-    {
-        active_signals_count++;
-        active_signals += "MOVEMENT_H1 ";
     }
 
     if(momentum_valid)
@@ -532,12 +502,12 @@ string EvaluateEntry()
         active_signals += last_smma_m15_direction > 0 ? "SMMA14_M15_LONG " : "SMMA14_M15_SHORT ";
     }
 
-    // Vérification minimum de signaux requis (4/6)
+    // Vérification minimum de signaux requis (4/5)
     if(active_signals_count < min_signals_required)
     {
         if(active_signals_count > 0)
         {
-            LogEntry("SIGNAUX INSUFFISANTS: " + IntegerToString(active_signals_count) + "/6 (min " + IntegerToString(min_signals_required) + ") - Signaux: " + active_signals);
+            LogEntry("SIGNAUX INSUFFISANTS: " + IntegerToString(active_signals_count) + "/5 (min " + IntegerToString(min_signals_required) + ") - Signaux: " + active_signals);
         }
         return "";
     }
@@ -550,7 +520,7 @@ string EvaluateEntry()
         return "";
     }
 
-    LogEntry("SIGNAUX VALIDÉS: " + IntegerToString(active_signals_count) + "/6 - Direction: " + (final_direction > 0 ? "LONG" : "SHORT") + " - " + active_signals);
+    LogEntry("SIGNAUX VALIDÉS: " + IntegerToString(active_signals_count) + "/5 - Direction: " + (final_direction > 0 ? "LONG" : "SHORT") + " - " + active_signals);
 
     // Vérification de tous les filtres
     if(!CheckTrendH4Filter(final_direction))
@@ -757,7 +727,7 @@ int OnInit()
     ArraySetAsSeries(m15_smma28, true);
 
     string start_msg = StringFormat(
-        "HERMES V2 DÉMARRÉ: %s | 6 SIGNAUX | Min=%d/6 | R:R=1:5 | SL=%.2f%% | TP=%.2f%% | BE=%.2f%% | Trading=%d:00-%d:00 | SMMA_Filter=%d",
+        "HERMES V2 DÉMARRÉ: %s | 5 SIGNAUX | Min=%d/5 | R:R=1:5 | SL=%.2f%% | TP=%.2f%% | BE=%.2f%% | Trading=%d:00-%d:00 | SMMA_Filter=%d",
         current_symbol, min_signals_required, stop_loss_pct, take_profit_pct, be_trigger_pct, trading_start_hour, trading_end_hour, smma_filter_period
     );
 
