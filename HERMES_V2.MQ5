@@ -2,51 +2,6 @@
 //|                                                    HERMES_V2.MQ5 |
 //|                              Algo Momentum Following BTC/ETH/SOL |
 //+------------------------------------------------------------------+
-#property indicator_chart_window
-#property indicator_buffers 8
-#property indicator_plots   8
-
-// Indicateurs H1
-#property indicator_label1  "EMA21_H1"
-#property indicator_type1   DRAW_LINE
-#property indicator_color1  clrBlue
-#property indicator_width1  2
-
-#property indicator_label2  "EMA55_H1"
-#property indicator_type2   DRAW_LINE
-#property indicator_color2  clrRed
-#property indicator_width2  2
-
-#property indicator_label3  "SMMA50_H1"
-#property indicator_type3   DRAW_LINE
-#property indicator_color3  clrGreen
-#property indicator_width3  2
-
-#property indicator_label4  "SMMA200_H1"
-#property indicator_type4   DRAW_LINE
-#property indicator_color4  clrDarkGreen
-#property indicator_width4  3
-
-// Indicateurs M15
-#property indicator_label5  "EMA21_M15"
-#property indicator_type5   DRAW_LINE
-#property indicator_color5  clrCyan
-#property indicator_width5  1
-
-#property indicator_label6  "EMA55_M15"
-#property indicator_type6   DRAW_LINE
-#property indicator_color6  clrMagenta
-#property indicator_width6  1
-
-#property indicator_label7  "SMMA14_M15"
-#property indicator_type7   DRAW_LINE
-#property indicator_color7  clrYellow
-#property indicator_width7  1
-
-#property indicator_label8  "SMMA28_M15"
-#property indicator_type8   DRAW_LINE
-#property indicator_color8  clrOrange
-#property indicator_width8  1
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -62,19 +17,32 @@ input double stop_loss_pct = 0.70;              // Stop Loss (%)
 input double take_profit_pct = 3.50;            // Take Profit (%)
 input double be_trigger_pct = 0.70;             // Break-Even trigger (%)
 
-// Seuils de signaux
+//=== INDICATEURS H1 ===
+input int ema21_h1_period = 21;                 // EMA21 H1 période
+input int ema55_h1_period = 55;                 // EMA55 H1 période
+input int smma50_h1_period = 50;                // SMMA50 H1 période
+input int smma200_h1_period = 200;              // SMMA200 H1 période
+
+//=== INDICATEURS M15 ===
+input int ema21_m15_period = 21;                // EMA21 M15 période
+input int ema55_m15_period = 55;                // EMA55 M15 période
+input int smma14_m15_period = 14;               // SMMA14 M15 période
+input int smma28_m15_period = 28;               // SMMA28 M15 période
+
+//=== INDICATEURS H4 ===
+input int smma_filter_period = 200;             // SMMA H4 filtre période
+input int rsi_h4_period = 14;                   // RSI H4 période
+
+//=== SEUILS DE SIGNAUX ===
 input double m15_momentum_threshold = 0.50;     // Momentum M15 minimum (%)
 
-// Système de validation flexible
+//=== SYSTÈME DE VALIDATION ===
 input int min_signals_required = 4;             // Minimum signaux requis (4/5)
 input int signal_validity_hours = 3;            // Validité signal en heures
 
-// Filtres RSI
+//=== FILTRES RSI H4 ===
 input int rsi_overbought_h4 = 80;               // RSI H4 sur-acheté
 input int rsi_oversold_h4 = 20;                 // RSI H4 sur-vendu
-
-// Filtre SMMA pour optimisation
-input int smma_filter_period = 200;             // Période SMMA filtre (plus souple que 50)
 
 // Filtres d'exposition
 input bool block_same_pair_on_off = true;       // Bloquer même crypto
@@ -116,15 +84,6 @@ double h4_smma200[], h4_rsi[];
 double m15_ema21[], m15_ema55[];
 double m15_smma14[], m15_smma28[];
 
-// Buffers d'affichage pour graphique
-double display_ema21_h1[];
-double display_ema55_h1[];
-double display_smma50_h1[];
-double display_smma200_h1[];
-double display_ema21_m15[];
-double display_ema55_m15[];
-double display_smma14_m15[];
-double display_smma28_m15[];
 
 // Variables de gestion
 bool be_applied = false;
@@ -743,21 +702,21 @@ int OnInit()
     trade.SetDeviationInPoints(10);
     trade.SetTypeFilling(ORDER_FILLING_FOK);
 
-    // Initialisation indicateurs H1
-    h1_ema21_handle = iMA(current_symbol, PERIOD_H1, 21, 0, MODE_EMA, PRICE_CLOSE);
-    h1_ema55_handle = iMA(current_symbol, PERIOD_H1, 55, 0, MODE_EMA, PRICE_CLOSE);
-    h1_smma50_handle = iMA(current_symbol, PERIOD_H1, 50, 0, MODE_SMMA, PRICE_CLOSE);
-    h1_smma200_handle = iMA(current_symbol, PERIOD_H1, 200, 0, MODE_SMMA, PRICE_CLOSE);
+    // Initialisation indicateurs H1 (avec paramètres input)
+    h1_ema21_handle = iMA(current_symbol, PERIOD_H1, ema21_h1_period, 0, MODE_EMA, PRICE_CLOSE);
+    h1_ema55_handle = iMA(current_symbol, PERIOD_H1, ema55_h1_period, 0, MODE_EMA, PRICE_CLOSE);
+    h1_smma50_handle = iMA(current_symbol, PERIOD_H1, smma50_h1_period, 0, MODE_SMMA, PRICE_CLOSE);
+    h1_smma200_handle = iMA(current_symbol, PERIOD_H1, smma200_h1_period, 0, MODE_SMMA, PRICE_CLOSE);
 
-    // Initialisation indicateurs H4
+    // Initialisation indicateurs H4 (avec paramètres input)
     h4_smma200_handle = iMA(current_symbol, PERIOD_H4, smma_filter_period, 0, MODE_SMMA, PRICE_CLOSE);
-    h4_rsi_handle = iRSI(current_symbol, PERIOD_H4, 14, PRICE_CLOSE);
+    h4_rsi_handle = iRSI(current_symbol, PERIOD_H4, rsi_h4_period, PRICE_CLOSE);
 
-    // Initialisation nouveaux indicateurs M15
-    m15_ema21_handle = iMA(current_symbol, PERIOD_M15, 21, 0, MODE_EMA, PRICE_CLOSE);
-    m15_ema55_handle = iMA(current_symbol, PERIOD_M15, 55, 0, MODE_EMA, PRICE_CLOSE);
-    m15_smma14_handle = iMA(current_symbol, PERIOD_M15, 14, 0, MODE_SMMA, PRICE_CLOSE);
-    m15_smma28_handle = iMA(current_symbol, PERIOD_M15, 28, 0, MODE_SMMA, PRICE_CLOSE);
+    // Initialisation indicateurs M15 (avec paramètres input)
+    m15_ema21_handle = iMA(current_symbol, PERIOD_M15, ema21_m15_period, 0, MODE_EMA, PRICE_CLOSE);
+    m15_ema55_handle = iMA(current_symbol, PERIOD_M15, ema55_m15_period, 0, MODE_EMA, PRICE_CLOSE);
+    m15_smma14_handle = iMA(current_symbol, PERIOD_M15, smma14_m15_period, 0, MODE_SMMA, PRICE_CLOSE);
+    m15_smma28_handle = iMA(current_symbol, PERIOD_M15, smma28_m15_period, 0, MODE_SMMA, PRICE_CLOSE);
 
     if(h1_ema21_handle == INVALID_HANDLE || h1_ema55_handle == INVALID_HANDLE ||
        h1_smma50_handle == INVALID_HANDLE || h1_smma200_handle == INVALID_HANDLE ||
@@ -781,25 +740,6 @@ int OnInit()
     ArraySetAsSeries(m15_smma14, true);
     ArraySetAsSeries(m15_smma28, true);
 
-    // Configuration des buffers d'affichage
-    SetIndexBuffer(0, display_ema21_h1, INDICATOR_DATA);
-    SetIndexBuffer(1, display_ema55_h1, INDICATOR_DATA);
-    SetIndexBuffer(2, display_smma50_h1, INDICATOR_DATA);
-    SetIndexBuffer(3, display_smma200_h1, INDICATOR_DATA);
-    SetIndexBuffer(4, display_ema21_m15, INDICATOR_DATA);
-    SetIndexBuffer(5, display_ema55_m15, INDICATOR_DATA);
-    SetIndexBuffer(6, display_smma14_m15, INDICATOR_DATA);
-    SetIndexBuffer(7, display_smma28_m15, INDICATOR_DATA);
-
-    // Configuration des séries
-    ArraySetAsSeries(display_ema21_h1, true);
-    ArraySetAsSeries(display_ema55_h1, true);
-    ArraySetAsSeries(display_smma50_h1, true);
-    ArraySetAsSeries(display_smma200_h1, true);
-    ArraySetAsSeries(display_ema21_m15, true);
-    ArraySetAsSeries(display_ema55_m15, true);
-    ArraySetAsSeries(display_smma14_m15, true);
-    ArraySetAsSeries(display_smma28_m15, true);
 
     string start_msg = StringFormat(
         "HERMES V2 DÉMARRÉ: %s | 5 SIGNAUX | Min=%d/5 | R:R=1:5 | SL=%.2f%% | TP=%.2f%% | BE=%.2f%% | Trading=%d:00-%d:00 | SMMA_Filter=%d",
@@ -839,57 +779,6 @@ void OnDeinit(const int reason)
     Print("HERMES V2 arrêté");
 }
 
-//+------------------------------------------------------------------+
-//| Fonction OnCalculate pour affichage des indicateurs            |
-//+------------------------------------------------------------------+
-int OnCalculate(const int rates_total,
-                const int prev_calculated,
-                const datetime &time[],
-                const double &open[],
-                const double &high[],
-                const double &low[],
-                const double &close[],
-                const long &tick_volume[],
-                const long &volume[],
-                const int &spread[])
-{
-    if(rates_total < 200) return 0; // Pas assez de données
-
-    int limit = rates_total - prev_calculated;
-    if(limit > rates_total - 200) limit = rates_total - 200;
-
-    // Mise à jour des buffers d'affichage avec les données des indicateurs
-    for(int i = limit - 1; i >= 0; i--)
-    {
-        // Copie des données H1 vers buffers d'affichage
-        if(CopyBuffer(h1_ema21_handle, 0, time[i], 1, h1_ema21) > 0)
-            display_ema21_h1[i] = h1_ema21[0];
-
-        if(CopyBuffer(h1_ema55_handle, 0, time[i], 1, h1_ema55) > 0)
-            display_ema55_h1[i] = h1_ema55[0];
-
-        if(CopyBuffer(h1_smma50_handle, 0, time[i], 1, h1_smma50) > 0)
-            display_smma50_h1[i] = h1_smma50[0];
-
-        if(CopyBuffer(h1_smma200_handle, 0, time[i], 1, h1_smma200) > 0)
-            display_smma200_h1[i] = h1_smma200[0];
-
-        // Copie des données M15 vers buffers d'affichage
-        if(CopyBuffer(m15_ema21_handle, 0, time[i], 1, m15_ema21) > 0)
-            display_ema21_m15[i] = m15_ema21[0];
-
-        if(CopyBuffer(m15_ema55_handle, 0, time[i], 1, m15_ema55) > 0)
-            display_ema55_m15[i] = m15_ema55[0];
-
-        if(CopyBuffer(m15_smma14_handle, 0, time[i], 1, m15_smma14) > 0)
-            display_smma14_m15[i] = m15_smma14[0];
-
-        if(CopyBuffer(m15_smma28_handle, 0, time[i], 1, m15_smma28) > 0)
-            display_smma28_m15[i] = m15_smma28[0];
-    }
-
-    return rates_total;
-}
 
 void OnTick()
 {
