@@ -400,28 +400,44 @@ string CheckRSIH4Filter(int direction)
 // 3. Exposition
 string CheckExposureFilter()
 {
+    // Log pour debug
+    LogEntry("DEBUG: Vérification exposition - Positions totales: " + IntegerToString(PositionsTotal()));
+
     for(int i = 0; i < PositionsTotal(); i++)
     {
         if(!position.SelectByIndex(i)) continue;
-        if(position.Magic() != HERMES_MAGIC) continue;
 
+        // Log des détails de chaque position
         string pos_symbol = position.Symbol();
+        ulong pos_magic = position.Magic();
 
-        // Même crypto
+        LogEntry("DEBUG: Position " + IntegerToString(i) + " - Symbole: " + pos_symbol + " - Magic: " + IntegerToString(pos_magic) + " - HERMES_MAGIC: " + IntegerToString(HERMES_MAGIC));
+
+        // CORRECTION IMPORTANTE: Vérifier TOUTES les positions, pas seulement celles avec notre Magic
+        // Car on veut éviter de trader si on a déjà des positions ouvertes (même d'autres EAs)
+
+        // Même crypto (vérifier TOUTES les positions sur le même symbole)
         if(block_same_pair_on_off && pos_symbol == current_symbol)
+        {
+            LogEntry("BLOCAGE EXPOSITION: Position existante sur " + current_symbol + " détectée (Magic: " + IntegerToString(pos_magic) + ")");
             return "FILTER_EXPO_SAME";
+        }
 
-        // Autre crypto
-        if(block_other_crypto_on_off && pos_symbol != current_symbol)
+        // Autre crypto (vérifier seulement nos positions HERMES)
+        if(block_other_crypto_on_off && position.Magic() == HERMES_MAGIC && pos_symbol != current_symbol)
         {
             for(int j = 0; j < ArraySize(supported_cryptos); j++)
             {
                 if(StringFind(pos_symbol, supported_cryptos[j]) >= 0)
+                {
+                    LogEntry("BLOCAGE EXPOSITION: Position HERMES existante sur autre crypto " + pos_symbol);
                     return "FILTER_EXPO_OTHER";
+                }
             }
         }
     }
 
+    LogEntry("DEBUG: Aucune exposition détectée - Ouverture autorisée");
     return "";
 }
 
@@ -635,12 +651,13 @@ void OpenPosition(string entry_signal)
         be_applied = false;
 
         string entry_log = StringFormat(
-            "POSITION OUVERTE: %s | Prix=%.5f | SL=%.5f (%.2f%%) | TP=%.5f (%.2f%%) | Lot=%.2f | Signaux=%s",
-            direction, current_price, sl_price, stop_loss_pct, tp_price, take_profit_pct, lot_size, signals
+            "POSITION OUVERTE: %s | Prix=%.5f | SL=%.5f (%.2f%%) | TP=%.5f (%.2f%%) | Lot=%.2f | Magic=%d | Signaux=%s",
+            direction, current_price, sl_price, stop_loss_pct, tp_price, take_profit_pct, lot_size, HERMES_MAGIC, signals
         );
 
         Print(entry_log);
         LogEntry(entry_log);
+        LogEntry("IMPORTANT: Position ouverte avec Magic " + IntegerToString(HERMES_MAGIC) + " - Total positions maintenant: " + IntegerToString(PositionsTotal()));
     }
     else
     {
